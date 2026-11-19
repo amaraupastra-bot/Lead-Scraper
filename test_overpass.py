@@ -1,32 +1,38 @@
 import httpx
 import json
 
-def test_overpass():
-    # Search for real businesses in any city with real websites
-    # Overpass QL query:
-    query = """
+def test_city(city_name="Lahore"):
+    # Overpass QL area query
+    query = f"""
     [out:json][timeout:25];
+    area["name"="{city_name}"]->.searchArea;
     (
-      node["office"~"estate_agent|lawyer|company|insurance|dentist|physician|architect"](40.68,-74.05,40.85,-73.90);
-      node["amenity"~"dentist|clinic|doctors|restaurant"](40.68,-74.05,40.85,-73.90);
+      node["office"](area.searchArea);
+      node["amenity"](area.searchArea);
+      node["shop"](area.searchArea);
     );
-    out 20;
+    out 25;
     """
     url = "https://overpass-api.de/api/interpreter"
-    r = httpx.post(url, data={"data": query}, timeout=25.0)
-    print("Overpass Status:", r.status_code)
-    if r.status_code == 200:
-        data = r.json()
-        elements = data.get("elements", [])
-        print("Total elements:", len(elements))
-        for el in elements[:10]:
-            tags = el.get("tags", {})
-            name = tags.get("name")
-            website = tags.get("website") or tags.get("contact:website")
-            phone = tags.get("phone") or tags.get("contact:phone")
-            email = tags.get("email") or tags.get("contact:email")
-            addr = f"{tags.get('addr:housenumber', '')} {tags.get('addr:street', '')}".strip()
-            print(f"Name: {name} | Web: {website} | Phone: {phone} | Email: {email} | Addr: {addr}")
+    headers = {
+        "User-Agent": "LeadFinderPlatform/1.0 (contact@leadfinder.ai)"
+    }
+    try:
+        r = httpx.post(url, data={"data": query}, headers=headers, timeout=25.0)
+        print(f"Overpass Status for {city_name}:", r.status_code)
+        if r.status_code == 200:
+            data = r.json()
+            elements = data.get("elements", [])
+            print(f"Total elements in {city_name}:", len(elements))
+            for el in elements[:10]:
+                tags = el.get("tags", {})
+                name = tags.get("name") or tags.get("name:en")
+                website = tags.get("website") or tags.get("contact:website")
+                phone = tags.get("phone") or tags.get("contact:phone")
+                addr = f"{tags.get('addr:street', '')} {tags.get('addr:city', '')}".strip()
+                print(f"  * {name} | Web: {website} | Phone: {phone} | Addr: {addr}")
+    except Exception as e:
+        print("Error:", e)
 
 if __name__ == "__main__":
-    test_overpass()
+    test_city("Lahore")

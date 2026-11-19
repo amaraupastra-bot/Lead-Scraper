@@ -14,13 +14,15 @@ from backend.models import Lead, Contact
 from backend.connectors.manager import connector_manager
 from backend.crawler.website_crawler import WebsiteCrawler
 from backend.connectors.verified_lead_database import get_verified_leads
+from backend.connectors.live_multi_search import live_search_leads
 
 router = APIRouter(prefix="/api/scraper", tags=["Lead Scraper"])
 
 class ScrapeRequest(BaseModel):
     business_niche: str
-    state_province: str
-    city_town: str
+    country: str = ""
+    state_province: str = ""
+    city_town: str = ""
     default_tag: str = "Scraped Lead, VIP"
     directory_source: str = "All Directories Combined"
     lead_count: int = 10
@@ -32,9 +34,10 @@ class MoveToGHLRequest(BaseModel):
 @router.post("/scrape")
 async def scrape_leads(req: ScrapeRequest, db: AsyncSession = Depends(get_db)):
     niche = req.business_niche.strip() or "Business Services"
-    city = req.city_town.strip() or "Local"
+    country = req.country.strip() if req.country else ""
+    city = req.city_town.strip() or ""
     state = req.state_province.strip() if req.state_province else ""
-    location_str = f"{city}, {state}" if state else city
+    location_str = f"{city}, {state}, {country}".strip(", ")
     tag = req.default_tag or "Scraped Lead, VIP"
     count = max(1, min(req.lead_count, 100))
 
@@ -54,11 +57,12 @@ async def scrape_leads(req: ScrapeRequest, db: AsyncSession = Depends(get_db)):
     except Exception:
         discovered = []
 
-    # 2. Guarantee 100% real, live, working businesses with DNS-verified websites
-    enriched_leads = get_verified_leads(
+    # 2. Live online search & directory enrichment for exact Country & City
+    enriched_leads = live_search_leads(
         niche=niche,
         city=city,
         state=state,
+        country=country,
         count=count
     )
 
