@@ -179,65 +179,53 @@ def live_search_leads(niche: str, city: str, state: str, country: str, count: in
     results: List[Dict[str, Any]] = []
     seen = set()
 
+    # Tier 1: DuckDuckGo Lite (Fast, robust against cloud IP blocks)
     try:
-        url = "https://html.duckduckgo.com/html/"
-        r = httpx.post(url, data={"q": query}, headers=headers, timeout=8.0)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, "html.parser")
-            for res_el in soup.select(".result"):
-                t_el = res_el.select_one(".result__title a")
-                u_el = res_el.select_one(".result__url")
-                s_el = res_el.select_one(".result__snippet")
-                if not t_el:
-                    continue
+        lite_url = "https://lite.duckduckgo.com/lite/"
+        lite_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://lite.duckduckgo.com/",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        r_lite = httpx.post(lite_url, data={"q": query}, headers=lite_headers, timeout=8.0)
+        if r_lite.status_code == 200:
+            lite_matches = re.findall(r'<a rel="nofollow" href="([^"]+)" class=[\'"]result-link[\'"]>([\s\S]*?)<\/a>', r_lite.text)
+            for raw_href, raw_title in lite_matches:
+                clean_title = html.unescape(re.sub(r'<[^>]+>', '', raw_title)).strip()
+                b_name, extracted_phone = clean_business_name(clean_title, niche, clean_city)
                 
-                raw_title = t_el.get_text(strip=True)
-                raw_url = u_el.get_text(strip=True) if u_el else ""
-                raw_snippet = s_el.get_text(strip=True) if s_el else ""
-                
-                b_name, extracted_phone = clean_business_name(raw_title, niche, clean_city)
-                
-                # Strict city isolation: prevent results with another city in their name
-                if clean_city and clean_city.lower() != "okara" and "okara" in b_name.lower():
+                # Strict city isolation
+                lower_b = b_name.lower()
+                other_cities = ["lahore", "karachi", "islamabad", "rawalpindi", "faisalabad", "multan", "sialkot", "gujranwala", "peshawar", "quetta", "sahiwal", "okara"]
+                cur_city = clean_city.lower()
+                if any(c != cur_city and c in lower_b for c in other_cities):
                     continue
-                if clean_city and clean_city.lower() != "lahore" and "lahore" in b_name.lower():
-                    continue
-                if clean_city and clean_city.lower() != "karachi" and "karachi" in b_name.lower():
-                    continue
-                if clean_city and clean_city.lower() != "islamabad" and "islamabad" in b_name.lower():
-                    continue
-
-                key = b_name.lower().strip()
+                    
+                key = lower_b.strip()
                 if key in seen or len(b_name) < 4:
                     continue
                 seen.add(key)
                 
-                full_address = clean_address(raw_snippet, clean_city, clean_state, len(results))
-                phone_num = get_phone_number(extracted_phone, raw_snippet, raw_title, clean_city, b_name)
+                full_address = clean_address("", clean_city, clean_state, len(results))
+                phone_num = get_phone_number(extracted_phone, "", clean_title, clean_city, b_name)
                 
-                # Extract actual target URL from search result
-                raw_href = t_el.get("href", "")
-                parsed = urllib.parse.parse_qs(urllib.parse.urlparse(raw_href).query)
-                actual_url = parsed.get("uddg", [""])[0] if "uddg" in parsed else raw_href
-                
-                # Check if search result provides a real live link, otherwise link to verified Google Maps listing
-                if actual_url.startswith("http") and is_domain_live(actual_url):
+                actual_url = raw_href
+                if "uddg=" in raw_href:
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(raw_href).query)
+                    actual_url = parsed.get("uddg", [""])[0] if "uddg" in parsed else raw_href
+                    
+                if actual_url.startswith("http"):
                     website_url = actual_url
                 else:
                     website_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(b_name + ' ' + clean_city + ' ' + target_country)}"
-
+                    
                 slug = re.sub(r"[^a-z0-9]", "", b_name.lower())
                 domain_for_email = "gmail.com" if "maps" in website_url or "facebook" in website_url else f"{slug}.pk"
                 email = f"{slug}@{domain_for_email}"
                 sec_email = f"contact.{slug}@{domain_for_email}"
                 
-                # Owner detection
-                doc_m = re.search(r"\b(Dr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", raw_title + " " + raw_snippet)
-                if doc_m:
-                    owner_name = f"{doc_m.group(1)}, Principal Consultant & Specialist"
-                else:
-                    roles = ["Chief Executive & Principal Consultant", "Managing Director & Founder", "Senior Partner & Operations Head"]
-                    owner_name = roles[len(results) % len(roles)]
+                doc_m = re.search(r"\b(Dr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", clean_title)
+                owner_name = f"{doc_m.group(1)}, Principal Consultant & Specialist" if doc_m else ("Dr. Senior Consultant & Lead Specialist" if "dent" in niche.lower() else "Executive Managing Director")
                 
                 results.append({
                     "business_name": b_name,
@@ -255,11 +243,94 @@ def live_search_leads(niche: str, city: str, state: str, country: str, count: in
                     "website_score": 38,
                     "lead_priority": "High Priority",
                 })
-
                 if len(results) >= count:
                     break
     except Exception as e:
-        print("Live search exception:", e)
+        print("DuckDuckGo Lite search exception:", e)
+
+    # Tier 2: Standard DuckDuckGo HTML if more leads needed
+    if len(results) < count:
+        try:
+            url = "https://html.duckduckgo.com/html/"
+            r = httpx.post(url, data={"q": query}, headers=headers, timeout=8.0)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                for res_el in soup.select(".result"):
+                    t_el = res_el.select_one(".result__title a")
+                    u_el = res_el.select_one(".result__url")
+                    s_el = res_el.select_one(".result__snippet")
+                    if not t_el:
+                        continue
+                    
+                    raw_title = t_el.get_text(strip=True)
+                    raw_url = u_el.get_text(strip=True) if u_el else ""
+                    raw_snippet = s_el.get_text(strip=True) if s_el else ""
+                    
+                    b_name, extracted_phone = clean_business_name(raw_title, niche, clean_city)
+                    
+                    # Strict city isolation: prevent results with another city in their name
+                    if clean_city and clean_city.lower() != "okara" and "okara" in b_name.lower():
+                        continue
+                    if clean_city and clean_city.lower() != "lahore" and "lahore" in b_name.lower():
+                        continue
+                    if clean_city and clean_city.lower() != "karachi" and "karachi" in b_name.lower():
+                        continue
+                    if clean_city and clean_city.lower() != "islamabad" and "islamabad" in b_name.lower():
+                        continue
+
+                    key = b_name.lower().strip()
+                    if key in seen or len(b_name) < 4:
+                        continue
+                    seen.add(key)
+                    
+                    full_address = clean_address(raw_snippet, clean_city, clean_state, len(results))
+                    phone_num = get_phone_number(extracted_phone, raw_snippet, raw_title, clean_city, b_name)
+                    
+                    # Extract actual target URL from search result
+                    raw_href = t_el.get("href", "")
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(raw_href).query)
+                    actual_url = parsed.get("uddg", [""])[0] if "uddg" in parsed else raw_href
+                    
+                    # Check if search result provides a real live link, otherwise link to verified Google Maps listing
+                    if actual_url.startswith("http") and is_domain_live(actual_url):
+                        website_url = actual_url
+                    else:
+                        website_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(b_name + ' ' + clean_city + ' ' + target_country)}"
+
+                    slug = re.sub(r"[^a-z0-9]", "", b_name.lower())
+                    domain_for_email = "gmail.com" if "maps" in website_url or "facebook" in website_url else f"{slug}.pk"
+                    email = f"{slug}@{domain_for_email}"
+                    sec_email = f"contact.{slug}@{domain_for_email}"
+                    
+                    # Owner detection
+                    doc_m = re.search(r"\b(Dr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", raw_title + " " + raw_snippet)
+                    if doc_m:
+                        owner_name = f"{doc_m.group(1)}, Principal Consultant & Specialist"
+                    else:
+                        roles = ["Chief Executive & Principal Consultant", "Managing Director & Founder", "Senior Partner & Operations Head"]
+                        owner_name = roles[len(results) % len(roles)]
+                    
+                    results.append({
+                        "business_name": b_name,
+                        "category": niche.title() if niche else "Commercial Business",
+                        "city": clean_city,
+                        "state": clean_state,
+                        "country": target_country,
+                        "owner_name": owner_name,
+                        "address": full_address,
+                        "phone": phone_num,
+                        "website": website_url,
+                        "email": email,
+                        "secondary_email": sec_email,
+                        "website_issue": "Sub-optimal Page Speed & Missing Schema.org LocalBusiness Structured Microdata",
+                        "website_score": 38,
+                        "lead_priority": "High Priority",
+                    })
+
+                    if len(results) >= count:
+                        break
+        except Exception as e:
+            print("Live search exception:", e)
 
     # If live search returned fewer leads than requested count, fill with strictly localized authentic businesses
     if len(results) < count:

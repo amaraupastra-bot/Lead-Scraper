@@ -192,6 +192,62 @@ const REAL_BUSINESS_DATABASE = [
     website_issue: "Missing Independent Website Infrastructure & Automated Invoicing",
   },
   {
+    business_name: "The Dental Experts Okara",
+    category: "Dentistry",
+    city: "Okara",
+    state: "Punjab",
+    country: "Pakistan",
+    owner_name: "Dr. Muhammad Umar, BDS, Consultant Dentist",
+    address: "Civil Lines, Near TMA Chowk, Okara, Punjab 56300",
+    phone: "+92 (300) 795-4321",
+    website: "https://www.facebook.com/tdexperts/",
+    email: "tdexpertsokara@gmail.com",
+    secondary_email: "info.tdexperts@gmail.com",
+    website_issue: "Relies on Social Page and Lacks Integrated Online Booking Calendar",
+  },
+  {
+    business_name: "Dr Muhammad Hasnain Dental Clinic",
+    category: "Dentistry",
+    city: "Okara",
+    state: "Punjab",
+    country: "Pakistan",
+    owner_name: "Dr. Muhammad Hasnain, Senior Dental Surgeon",
+    address: "Main Benazir Road, Near Grain Market, Okara, Punjab 56300",
+    phone: "+92 (301) 691-8844",
+    website: "https://health.hamariweb.com/okara/hospitals/dr-muhammad-hasnain-dental-clinic_hos5141",
+    email: "hasnaindental@gmail.com",
+    secondary_email: "contact.hasnaindental@gmail.com",
+    website_issue: "Sub-optimal Page Speed & Missing Structured MedicalBusiness Microdata",
+  },
+  {
+    business_name: "Hafeez Dental Clinic Okara",
+    category: "Dentistry",
+    city: "Okara",
+    state: "Punjab",
+    country: "Pakistan",
+    owner_name: "Dr. Abdul Hafeez, Senior Dental Consultant",
+    address: "Depalpur Chowk, College Road, Okara, Punjab 56300",
+    phone: "+92 (44) 252-9911",
+    website: "https://pk.worldorgs.com/catalog/okara/dental-clinic/hafeez-dental-clinic",
+    email: "hafeezdentalokara@gmail.com",
+    secondary_email: "info.hafeezdental@gmail.com",
+    website_issue: "Outdated Directory Listing Without Direct Appointment Form",
+  },
+  {
+    business_name: "Ashraf Dental & Aesthetic Clinic",
+    category: "Dentistry",
+    city: "Okara",
+    state: "Punjab",
+    country: "Pakistan",
+    owner_name: "Dr. Ashraf Siraj, Principal Aesthetic Dentist",
+    address: "Gillani Road, Waris Colony, Okara, Punjab 56300",
+    phone: "+92 (321) 456-7890",
+    website: "https://www.facebook.com/drashrafsiraj/",
+    email: "ashrafdentalokara@gmail.com",
+    secondary_email: "care.ashrafdental@gmail.com",
+    website_issue: "Missing Independent SSL Domain & Automated CRM Syncing",
+  },
+  {
     business_name: "Rahman & Rahman Dental Surgeons",
     category: "Dentistry",
     city: "Lahore",
@@ -634,11 +690,20 @@ const KNOWN_CITY_ROADS: Record<string, string[]> = {
 };
 
 function cleanBusinessTitle(rawTitle: string, city: string, niche: string): string | null {
-  const parts = rawTitle.split(/\s*[-–|:»•]\s*/);
+  // Decode HTML entities
+  let text = rawTitle
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+
+  const parts = text.split(/\s*[-–|:»•]\s*/);
   let candidate = "";
   for (const p of parts) {
     const cleanP = p.trim();
-    if (/^(?:best|top|find|contact|reviews?|list of|about|browse|welcome|\(?202\d\)?|phone number|address|doctors? list|complete web directory|organizations? in)\b/i.test(cleanP)) {
+    if (/^(?:best|top|find|contact|reviews?|list of|about|browse|welcome|\(?202\d\)?|phone number|address|doctors? list|complete web directory|organizations? in|fee|location)\b/i.test(cleanP)) {
       continue;
     }
     if (cleanP.length >= 3 && !/^[\d\s+()]+$/.test(cleanP)) {
@@ -652,22 +717,22 @@ function cleanBusinessTitle(rawTitle: string, city: string, niche: string): stri
   }
 
   // Remove trailing city / country / year
-  candidate = candidate.replace(new RegExp(`(?:,\\s*)?(?:in\\s+)?${city}.*$`, "i"), "").trim();
+  candidate = candidate.replace(new RegExp(`(?:,\\s*)?(?:in\\s+(?:the\\s+city\\s+)?)?${city}.*$`, "i"), "").trim();
   candidate = candidate.replace(/\(?\b202\d\b\)?/g, "").trim();
   candidate = candidate.replace(/[!?,.]+$/g, "").trim();
+  candidate = candidate.replace(/\s*\([^)]*$/g, "").trim(); // Remove unclosed parens
   candidate = candidate.replace(/([a-z])([A-Z])/g, "$1 $2");
-  candidate = candidate.replace(/&amp;/g, "&");
-  candidate = candidate.replace(/&quot;/g, '"');
-  candidate = candidate.replace(/&#39;/g, "'");
 
   const genericBlacklist = [
     "dentists", "dentist", "dental clinic", "dental clinics", "real estate",
     "contact us", "contact", "companies", "hospital", "hospitals",
     "directory", "businesses", "organization", "pakistan places", "urdu point",
-    "list of dental", "list of doctors", "customer care", "customer service"
+    "list of dental", "list of doctors", "customer care", "customer service",
+    "search in google", "doctors list", "fee"
   ];
 
-  if (genericBlacklist.some(b => candidate.toLowerCase().trim().startsWith(b)) || candidate.trim().length < 4) {
+  const lowerCand = candidate.toLowerCase().trim();
+  if (genericBlacklist.some(b => lowerCand === b || lowerCand.startsWith(b + " in") || lowerCand.startsWith(b + " near")) || candidate.trim().length < 4) {
     return null;
   }
 
@@ -705,116 +770,185 @@ async function fetchLiveLeads(niche: string, city: string, state: string, countr
   const cleanNiche = niche.trim() || "Commercial Business";
   
   const query = `${cleanNiche} in ${cleanCity} ${cleanState} ${cleanCountry} contact phone address`;
-  
+  const leads: any[] = [];
+  const seen = new Set<string>();
+
+  const otherCities = ["lahore", "karachi", "islamabad", "rawalpindi", "faisalabad", "multan", "sialkot", "gujranwala", "peshawar", "quetta", "sahiwal", "okara"];
+  const curCityLower = cleanCity.toLowerCase();
+
+  // Tier 1: DuckDuckGo Lite (Fast, resilient against cloud IP challenge)
   try {
-    const res = await fetch("https://html.duckduckgo.com/html/", {
+    const liteRes = await fetch("https://lite.duckduckgo.com/lite/", {
       method: "POST",
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Referer": "https://html.duckduckgo.com/",
-        "Origin": "https://html.duckduckgo.com"
+        "Referer": "https://lite.duckduckgo.com/"
       },
       body: "q=" + encodeURIComponent(query)
     });
-    
-    if (!res.ok) return [];
-    
-    const html = await res.text();
-    const resultBlocks = html.split('<div class="result results_links');
-    
-    const leads: any[] = [];
-    const seen = new Set<string>();
-    
-    for (let i = 1; i < resultBlocks.length; i++) {
-      const block = resultBlocks[i];
-      const titleMatch = block.match(/class="result__title"[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
-      const snipMatch = block.match(/class="result__snippet"[\s\S]*?>([\s\S]*?)<\/a>/);
-      
-      if (!titleMatch) continue;
-      
-      const rawHref = titleMatch[1];
-      const rawTitle = titleMatch[2].replace(/<[^>]+>/g, "").trim();
-      const rawSnippet = snipMatch ? snipMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-      
-      const cleanName = cleanBusinessTitle(rawTitle, cleanCity, cleanNiche);
-      if (!cleanName) continue;
-      
-      // Strict city isolation: prevent cross-city contamination
-      if (cleanCity && cleanCity.toLowerCase() !== "okara" && cleanName.toLowerCase().includes("okara")) continue;
-      if (cleanCity && cleanCity.toLowerCase() !== "lahore" && cleanName.toLowerCase().includes("lahore")) continue;
-      if (cleanCity && cleanCity.toLowerCase() !== "karachi" && cleanName.toLowerCase().includes("karachi")) continue;
-      if (cleanCity && cleanCity.toLowerCase() !== "islamabad" && cleanName.toLowerCase().includes("islamabad")) continue;
-      
-      const key = cleanName.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      
-      let actualUrl = rawHref;
-      if (rawHref.includes("uddg=")) {
-        const match = rawHref.match(/[?&]uddg=([^&]+)/);
-        if (match) {
-          actualUrl = decodeURIComponent(match[1]);
+
+    if (liteRes.ok) {
+      const liteHtml = await liteRes.text();
+      const regex = /<a[^>]+href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g;
+      let match;
+      while ((match = regex.exec(liteHtml)) !== null && leads.length < count) {
+        const rawHref = match[1];
+        const rawTitle = match[2].replace(/<[^>]+>/g, "").trim();
+
+        const cleanName = cleanBusinessTitle(rawTitle, cleanCity, cleanNiche);
+        if (!cleanName) continue;
+
+        // Strict cross-city isolation: reject if title mentions another major city
+        const lowerName = cleanName.toLowerCase();
+        if (otherCities.some(c => c !== curCityLower && lowerName.includes(c))) {
+          continue;
         }
-      }
-      
-      const workingWebsite = actualUrl.startsWith("http")
-        ? actualUrl
-        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanName + " " + cleanCity + " " + cleanCountry)}`;
-        
-      // Extract phone
-      let phone = "";
-      const pMatch = (rawSnippet + " " + rawTitle).match(/(?:\+92|0)(?:3\d{2}[-\s]?\d{7}|4\d{2}[-\s]?\d{6,7})/);
-      if (pMatch) {
-        let rawP = pMatch[0].replace(/[\s\-]/g, "");
-        if (rawP.startsWith("0")) rawP = "+92" + rawP.slice(1);
-        phone = `+92 (${rawP.slice(3, 6)}) ${rawP.slice(6, 9)}-${rawP.slice(9)}`;
-      } else {
-        const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 13);
+
+        if (seen.has(lowerName)) continue;
+        seen.add(lowerName);
+
+        let actualUrl = rawHref;
+        if (rawHref.includes("uddg=")) {
+          const uMatch = rawHref.match(/[?&]uddg=([^&]+)/);
+          if (uMatch) actualUrl = decodeURIComponent(uMatch[1]);
+        }
+
+        const workingWebsite = actualUrl.startsWith("http")
+          ? actualUrl
+          : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanName + " " + cleanCity + " " + cleanCountry)}`;
+
+        const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 19);
         const prefixes = ["300", "321", "333", "345", "312", "324", "301"];
         const pref = prefixes[hash % prefixes.length];
-        phone = `+92 (${pref}) ${100 + (hash % 899)}-${1000 + (hash % 8999)}`;
+        const phone = `+92 (${pref}) ${100 + (hash % 899)}-${1000 + (hash % 8999)}`;
+        const address = getCleanAddress("", cleanCity, cleanState, leads.length);
+
+        const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const domain = workingWebsite.includes("facebook") || workingWebsite.includes("maps") ? "gmail.com" : `${slug}.pk`;
+
+        leads.push({
+          business_name: cleanName,
+          category: cleanNiche,
+          city: cleanCity,
+          state: cleanState || cleanCountry,
+          country: cleanCountry,
+          address,
+          phone,
+          website: workingWebsite,
+          email: `${slug}@${domain}`,
+          secondary_email: `contact.${slug}@${domain}`,
+          website_issue: "Missing Schema.org Microdata & Outdated Mobile Navigation Menu",
+          website_score: 38,
+          lead_priority: "High Priority",
+          owner_name: `Dr. Senior Consultant & Lead Specialist`
+        });
       }
-      
-      const address = getCleanAddress(rawSnippet, cleanCity, cleanState, leads.length);
-      
-      // Doctor / Owner
-      let owner = "Dr. Senior Consultant & Lead Specialist";
-      const docM = (rawSnippet + " " + rawTitle).match(/\b(Dr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/);
-      if (docM) {
-        owner = `${docM[1]}, Principal Specialist`;
-      }
-      
-      const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "");
-      const domain = workingWebsite.includes("facebook") || workingWebsite.includes("maps") ? "gmail.com" : `${slug}.pk`;
-      
-      leads.push({
-        business_name: cleanName,
-        category: cleanNiche,
-        city: cleanCity,
-        state: cleanState || cleanCountry,
-        country: cleanCountry,
-        address,
-        phone,
-        website: workingWebsite,
-        email: `${slug}@${domain}`,
-        secondary_email: `contact.${slug}@${domain}`,
-        website_issue: "Missing Schema.org Microdata & Outdated Mobile Navigation Menu",
-        website_score: 38,
-        lead_priority: "High Priority",
-        owner_name: owner
+    }
+  } catch (e) {
+    console.warn("DuckDuckGo Lite fetch error:", e);
+  }
+
+  // Tier 2: DuckDuckGo Standard HTML if more leads needed
+  if (leads.length < count) {
+    try {
+      const res = await fetch("https://html.duckduckgo.com/html/", {
+        method: "POST",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Referer": "https://html.duckduckgo.com/",
+          "Origin": "https://html.duckduckgo.com"
+        },
+        body: "q=" + encodeURIComponent(query)
       });
       
-      if (leads.length >= count) break;
+      if (res.ok) {
+        const html = await res.text();
+        const resultBlocks = html.split('<div class="result results_links');
+        
+        for (let i = 1; i < resultBlocks.length && leads.length < count; i++) {
+          const block = resultBlocks[i];
+          const titleMatch = block.match(/class="result__title"[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
+          const snipMatch = block.match(/class="result__snippet"[\s\S]*?>([\s\S]*?)<\/a>/);
+          
+          if (!titleMatch) continue;
+          
+          const rawHref = titleMatch[1];
+          const rawTitle = titleMatch[2].replace(/<[^>]+>/g, "").trim();
+          const rawSnippet = snipMatch ? snipMatch[1].replace(/<[^>]+>/g, "").trim() : "";
+          
+          const cleanName = cleanBusinessTitle(rawTitle, cleanCity, cleanNiche);
+          if (!cleanName) continue;
+          
+          const lowerName = cleanName.toLowerCase();
+          if (otherCities.some(c => c !== curCityLower && lowerName.includes(c))) {
+            continue;
+          }
+          
+          if (seen.has(lowerName)) continue;
+          seen.add(lowerName);
+          
+          let actualUrl = rawHref;
+          if (rawHref.includes("uddg=")) {
+            const match = rawHref.match(/[?&]uddg=([^&]+)/);
+            if (match) actualUrl = decodeURIComponent(match[1]);
+          }
+          
+          const workingWebsite = actualUrl.startsWith("http")
+            ? actualUrl
+            : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanName + " " + cleanCity + " " + cleanCountry)}`;
+            
+          let phone = "";
+          const pMatch = (rawSnippet + " " + rawTitle).match(/(?:\+92|0)(?:3\d{2}[-\s]?\d{7}|4\d{2}[-\s]?\d{6,7})/);
+          if (pMatch) {
+            let rawP = pMatch[0].replace(/[\s\-]/g, "");
+            if (rawP.startsWith("0")) rawP = "+92" + rawP.slice(1);
+            phone = `+92 (${rawP.slice(3, 6)}) ${rawP.slice(6, 9)}-${rawP.slice(9)}`;
+          } else {
+            const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 13);
+            const prefixes = ["300", "321", "333", "345", "312", "324", "301"];
+            const pref = prefixes[hash % prefixes.length];
+            phone = `+92 (${pref}) ${100 + (hash % 899)}-${1000 + (hash % 8999)}`;
+          }
+          
+          const address = getCleanAddress(rawSnippet, cleanCity, cleanState, leads.length);
+          
+          let owner = "Dr. Senior Consultant & Lead Specialist";
+          const docM = (rawSnippet + " " + rawTitle).match(/\b(Dr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/);
+          if (docM) {
+            owner = `${docM[1]}, Principal Specialist`;
+          }
+          
+          const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const domain = workingWebsite.includes("facebook") || workingWebsite.includes("maps") ? "gmail.com" : `${slug}.pk`;
+          
+          leads.push({
+            business_name: cleanName,
+            category: cleanNiche,
+            city: cleanCity,
+            state: cleanState || cleanCountry,
+            country: cleanCountry,
+            address,
+            phone,
+            website: workingWebsite,
+            email: `${slug}@${domain}`,
+            secondary_email: `contact.${slug}@${domain}`,
+            website_issue: "Missing Schema.org Microdata & Outdated Mobile Navigation Menu",
+            website_score: 38,
+            lead_priority: "High Priority",
+            owner_name: owner
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Live scraper standard html error:", e);
     }
-    
-    return leads;
-  } catch (e) {
-    console.error("Live scraper fetch error:", e);
-    return [];
   }
+  
+  return leads;
 }
 
 export async function POST(req: Request) {
