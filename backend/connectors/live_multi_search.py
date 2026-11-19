@@ -196,6 +196,17 @@ def live_search_leads(niche: str, city: str, state: str, country: str, count: in
                 raw_snippet = s_el.get_text(strip=True) if s_el else ""
                 
                 b_name, extracted_phone = clean_business_name(raw_title, niche, clean_city)
+                
+                # Strict city isolation: prevent results with another city in their name
+                if clean_city and clean_city.lower() != "okara" and "okara" in b_name.lower():
+                    continue
+                if clean_city and clean_city.lower() != "lahore" and "lahore" in b_name.lower():
+                    continue
+                if clean_city and clean_city.lower() != "karachi" and "karachi" in b_name.lower():
+                    continue
+                if clean_city and clean_city.lower() != "islamabad" and "islamabad" in b_name.lower():
+                    continue
+
                 key = b_name.lower().strip()
                 if key in seen or len(b_name) < 4:
                     continue
