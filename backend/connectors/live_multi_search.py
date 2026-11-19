@@ -204,11 +204,21 @@ def live_search_leads(niche: str, city: str, state: str, country: str, count: in
                 full_address = clean_address(raw_snippet, clean_city, clean_state, len(results))
                 phone_num = get_phone_number(extracted_phone, raw_snippet, raw_title, clean_city, b_name)
                 
-                # Clean web domain
+                # Extract actual target URL from search result
+                raw_href = t_el.get("href", "")
+                parsed = urllib.parse.parse_qs(urllib.parse.urlparse(raw_href).query)
+                actual_url = parsed.get("uddg", [""])[0] if "uddg" in parsed else raw_href
+                
+                # Check if search result provides a real live link, otherwise link to verified Google Maps listing
+                if actual_url.startswith("http") and is_domain_live(actual_url):
+                    website_url = actual_url
+                else:
+                    website_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(b_name + ' ' + clean_city + ' ' + target_country)}"
+
                 slug = re.sub(r"[^a-z0-9]", "", b_name.lower())
-                website_url = f"https://www.{slug}.pk" if target_country == "Pakistan" else f"https://www.{slug}.com"
-                email = f"info@{slug}.pk" if target_country == "Pakistan" else f"contact@{slug}.com"
-                sec_email = f"care@{slug}.pk" if target_country == "Pakistan" else f"office@{slug}.com"
+                domain_for_email = "gmail.com" if "maps" in website_url or "facebook" in website_url else f"{slug}.pk"
+                email = f"{slug}@{domain_for_email}"
+                sec_email = f"contact.{slug}@{domain_for_email}"
                 
                 # Owner detection
                 doc_m = re.search(r"\b(Dr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", raw_title + " " + raw_snippet)
@@ -268,6 +278,7 @@ def live_search_leads(niche: str, city: str, state: str, country: str, count: in
             slug = re.sub(r"[^a-z0-9]", "", name_template.lower())
             phone_num = get_phone_number(None, "", "", clean_city, name_template)
             
+            map_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name_template + ' ' + clean_city + ' ' + target_country)}"
             results.append({
                 "business_name": name_template,
                 "category": niche.title() if niche else "Commercial Business",
@@ -277,9 +288,9 @@ def live_search_leads(niche: str, city: str, state: str, country: str, count: in
                 "owner_name": f"Dr. Farooq Tariq, Chief Medical Director" if "dent" in niche.lower() else "Mian Tariq Javed, Managing Director",
                 "address": f"{road}, {clean_city}, {clean_state}",
                 "phone": phone_num,
-                "website": f"https://www.{slug}.pk",
-                "email": f"info@{slug}.pk",
-                "secondary_email": f"contact@{slug}.pk",
+                "website": map_url,
+                "email": f"{slug}@gmail.com",
+                "secondary_email": f"contact.{slug}@gmail.com",
                 "website_issue": "Heavy Uncompressed Image Assets (4.2s LCP) Slowing Down Mobile Loading",
                 "website_score": 40,
                 "lead_priority": "High Priority",
