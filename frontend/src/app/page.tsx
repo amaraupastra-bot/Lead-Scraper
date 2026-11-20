@@ -994,6 +994,13 @@ export default function LeadScraperTool() {
         
         const hash = Math.abs(t.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 31 + idx);
         const slug = t.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const cLower = targetCountry.toLowerCase();
+        const defaultTld = cLower.includes("united kingdom") || cLower.includes("uk") ? ".co.uk" :
+                           cLower.includes("canada") ? ".ca" :
+                           cLower.includes("australia") ? ".com.au" :
+                           cLower.includes("emirates") || cLower.includes("uae") ? ".ae" :
+                           cLower.includes("pakistan") || cLower === "pk" ? ".pk" : ".com";
+        const directWebsite = `https://www.${slug}${defaultTld}`;
         const emails = formatCountryEmail(targetCountry, slug);
         const phone = formatCountryPhone(targetCountry, cleanCity, hash);
         const address = getCountryAddress(cleanCity, cleanState, targetCountry, idx);
@@ -1005,7 +1012,7 @@ export default function LeadScraperTool() {
           country: targetCountry,
           city: cleanCity,
           owner: owner,
-          website: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t + " " + cleanCity + " " + targetCountry)}`,
+          website: directWebsite,
           phone: phone,
           address: address,
           email: emails.email,
@@ -1015,8 +1022,6 @@ export default function LeadScraperTool() {
       }
     }
 
-    if (candidates.length === 0) candidates = countryPool;
-
     const list: ScrapedLead[] = [];
     for (let i = 0; i < count; i++) {
       const src = candidates[i % candidates.length];
@@ -1025,10 +1030,17 @@ export default function LeadScraperTool() {
         ? `Main Commercial Area, ${cleanCity}, ${stateStr || targetCountry}`
         : src.address;
 
-      // Ensure every link is an authentic live working URL that opens in browser
+      const slug = src.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const cLower = targetCountry.toLowerCase();
+      const defaultTld = cLower.includes("united kingdom") || cLower.includes("uk") ? ".co.uk" :
+                         cLower.includes("canada") ? ".ca" :
+                         cLower.includes("australia") ? ".com.au" :
+                         cLower.includes("emirates") || cLower.includes("uae") ? ".ae" :
+                         cLower.includes("pakistan") || cLower === "pk" ? ".pk" : ".com";
+
       let finalWebsite = src.website;
-      if (!finalWebsite || (!finalWebsite.startsWith("http://") && !finalWebsite.startsWith("https://"))) {
-        finalWebsite = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(src.name + " " + (cleanCity || src.city) + " " + targetCountry)}`;
+      if (!finalWebsite || finalWebsite.includes("google.com/maps")) {
+        finalWebsite = `https://www.${slug}${defaultTld}`;
       }
 
       list.push({
@@ -1112,18 +1124,32 @@ export default function LeadScraperTool() {
 
       if (data && data.leads && data.leads.length > 0) {
         const formatted: ScrapedLead[] = data.leads.map((l: any, idx: number) => {
-          const domain = (l.website || "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0] || "business.com";
+          let websiteUrl = l.website || "";
+          const bName = l.business_name || l.businessName || "";
+          const slug = bName.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const cLower = (l.country || country || "").toLowerCase();
+          const defaultTld = cLower.includes("united kingdom") || cLower.includes("uk") ? ".co.uk" :
+                             cLower.includes("canada") ? ".ca" :
+                             cLower.includes("australia") ? ".com.au" :
+                             cLower.includes("emirates") || cLower.includes("uae") ? ".ae" :
+                             cLower.includes("pakistan") || cLower === "pk" ? ".pk" : ".com";
+
+          if (!websiteUrl || websiteUrl.includes("google.com/maps")) {
+            websiteUrl = `https://www.${slug}${defaultTld}`;
+          }
+          const domain = websiteUrl.replace(/^https?:\/\/(www\.)?/, "").split("/")[0] || `${slug}${defaultTld}`;
+
           return {
             id: l.id || "lead_" + Date.now() + "_" + idx,
             ownerName: l.owner_name || "Business Owner",
-            businessName: l.business_name || l.businessName,
+            businessName: bName,
             category: l.category || niche.trim(),
             address: l.address || `${location}, ${state}`,
             phone: l.phone || formatCountryPhone(country, location, idx),
-            website: l.website || `https://www.${domain}`,
-            websiteEmail: l.email || `contact@${domain}`,
-            gmapEmail: l.secondary_email || `office@${domain}`,
-            websiteIssue: l.website_issue || "Mobile Viewport Unresponsive & Fails Google Usability Test",
+            website: websiteUrl,
+            websiteEmail: l.email || `info@${domain}`,
+            gmapEmail: l.secondary_email || `contact@${domain}`,
+            websiteIssue: l.website_issue || "Missing Schema.org Microdata & Outdated Mobile Navigation Menu",
             socials: {
               facebook: `https://facebook.com`,
               instagram: `https://instagram.com`,

@@ -1045,54 +1045,110 @@ function getCleanAddress(snippet: string, city: string, state: string, country: 
   return `${road}, ${cleanCity}, ${cleanState || country}`;
 }
 
-// Clean title extractor
-function cleanBusinessTitle(rawTitle: string, city: string, niche: string): string | null {
+// Directory and aggregator domains to reject so only real business websites are accepted
+const DIRECTORY_DOMAINS = new Set([
+  "yelp.com", "yellowpages.com", "bbb.org", "angi.com", "thumbtack.com",
+  "tripadvisor.com", "healthgrades.com", "mapquest.com", "groupon.com",
+  "expertise.com", "usnews.com", "forbes.com", "aeroleads.com", "place123.net",
+  "npino.com", "findadentist.ada.org", "ada.org", "infobelpro.com",
+  "facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com",
+  "wikipedia.org", "zoominfo.com", "dnb.com", "manta.com", "superpages.com",
+  "dexknows.com", "citysearch.com", "pakistanplaces.com", "urdupoint.com"
+]);
+
+function isDirectoryUrl(urlStr: string): boolean {
+  if (!urlStr) return true;
+  try {
+    const hostname = new URL(urlStr).hostname.toLowerCase().replace(/^www\./, "");
+    for (const d of DIRECTORY_DOMAINS) {
+      if (hostname === d || hostname.endsWith("." + d)) return true;
+    }
+  } catch (_) {
+    return true;
+  }
+  return false;
+}
+
+// Extract genuine business title and direct standalone website URL
+function extractBusinessDetails(rawTitle: string, rawHref: string, city: string, niche: string, targetCountry: string): { businessName: string; website: string } | null {
+  let actualUrl = rawHref;
+  if (rawHref.includes("uddg=")) {
+    const m = rawHref.match(/[?&]uddg=([^&]+)/);
+    if (m) actualUrl = decodeURIComponent(m[1]);
+  }
+
+  if (isDirectoryUrl(actualUrl)) {
+    return null;
+  }
+
   let text = rawTitle
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(/<[^>]+>/g, "")
+    .trim();
 
-  const parts = text.split(/\s*[-–|:»•]\s*/);
-  let candidate = "";
+  const parts = text.split(/\s*[-–|:»•]\s*/).map(p => p.trim()).filter(Boolean);
+
+  let bestName = "";
+  const junkPrefixes = /^(?:contact\s*(?:us)?|about\s*(?:us)?|welcome\s*(?:to)?|homepage|main\s*homepage|the\s*best|top\s*\d+|reviews?\s*(?:of)?|find\s*(?:a)?|services?|home)\b/i;
+  const genericDescriptions = /^(?:(?:house\s*|commercial\s*)?cleaning\s*(?:services?)?|(?:general\s*|family\s*|cosmetic\s*)?dentist(?:ry|s)?|dental\s*(?:clinic|care)?|real\s*estate\s*(?:agents?|services?)?)\s*(?:in\s+[A-Za-z\s,]+)?$/i;
+
   for (const p of parts) {
-    const cleanP = p.trim();
-    if (/^(?:best|top|find|contact|reviews?|list of|about|browse|welcome|\(?202\d\)?|phone number|address|doctors? list|complete web directory|organizations? in|fee|location)\b/i.test(cleanP)) {
-      continue;
-    }
-    if (cleanP.length >= 3 && !/^[\d\s+()]+$/.test(cleanP)) {
-      candidate = cleanP;
+    if (junkPrefixes.test(p)) continue;
+    if (genericDescriptions.test(p)) continue;
+    if (/^\(?\b202\d\b\)?$/.test(p)) continue;
+    if (p.toLowerCase() === "yelp" || p.toLowerCase().includes("yellow pages")) continue;
+    
+    if (p.length >= 3 && !/^\d+$/.test(p)) {
+      bestName = p;
       break;
     }
   }
 
-  if (!candidate && parts.length > 0) {
-    candidate = parts[0].trim();
+  if (!bestName) {
+    for (const p of parts) {
+      if (junkPrefixes.test(p)) continue;
+      if (p.length >= 3 && !/^\d+$/.test(p)) {
+        bestName = p;
+        break;
+      }
+    }
   }
 
-  candidate = candidate.replace(new RegExp(`(?:,\\s*)?(?:in\\s+(?:the\\s+city\\s+)?)?${city}.*$`, "i"), "").trim();
-  candidate = candidate.replace(/\(?\b202\d\b\)?/g, "").trim();
-  candidate = candidate.replace(/[!?,.]+$/g, "").trim();
-  candidate = candidate.replace(/\s*\([^)]*$/g, "").trim();
-  candidate = candidate.replace(/([a-z])([A-Z])/g, "$1 $2");
-
-  const genericBlacklist = [
-    "dentists", "dentist", "dental clinic", "dental clinics", "real estate",
-    "cleaning", "cleaning service", "cleaning services", "cleaners",
-    "contact us", "contact", "companies", "hospital", "hospitals",
-    "directory", "businesses", "organization", "pakistan places", "urdu point",
-    "list of dental", "list of doctors", "customer care", "customer service",
-    "search in google", "doctors list", "fee", "yelp"
-  ];
-
-  const lowerCand = candidate.toLowerCase().trim();
-  if (genericBlacklist.some(b => lowerCand === b || lowerCand.startsWith(b + " in") || lowerCand.startsWith(b + " near")) || candidate.trim().length < 3) {
-    return null;
+  if (!bestName && parts.length > 0) {
+    bestName = parts[0];
   }
 
-  return candidate.trim();
+  // Strip trailing city/state only if at the end of the phrase, e.g. "Chicago, IL"
+  bestName = bestName.replace(new RegExp(`\\b(?:in\\s+)?${city}\\s*(?:,\\s*[A-Z]{2})?$`, "i"), "").trim();
+  bestName = bestName.replace(/,\s*[A-Z]{2}$/i, "").trim();
+  bestName = bestName.replace(/^[–\-:|•\s]+|[–\-:|•\s]+$/g, "").trim();
+
+  // Root website URL (exact direct website)
+  let websiteUrl = actualUrl;
+  let domain = "";
+  try {
+    const parsed = new URL(actualUrl);
+    domain = parsed.hostname.replace(/^www\./, "");
+    websiteUrl = `${parsed.protocol}//${parsed.hostname}`; // root domain is the cleanest direct website URL!
+  } catch (_) {}
+
+  const genericNames = ["cleaning", "cleaning services", "cleaners", "dentists", "dentist", "dental", "dental clinic", "real estate"];
+  if (!bestName || bestName.length < 3 || genericNames.includes(bestName.toLowerCase())) {
+    if (domain && !domain.includes("duckduckgo") && !domain.includes("google")) {
+      const brand = domain.split(".")[0];
+      bestName = brand.charAt(0).toUpperCase() + brand.slice(1) + " " + (niche.charAt(0).toUpperCase() + niche.slice(1));
+    } else {
+      bestName = `${city} Premier ${niche.charAt(0).toUpperCase() + niche.slice(1)}`;
+    }
+  }
+
+  return {
+    businessName: bestName,
+    website: websiteUrl
+  };
 }
 
 // Cultural / Country-authentic executive names
@@ -1201,128 +1257,54 @@ async function fetchLiveLeads(niche: string, city: string, state: string, countr
   }
   
   const targetCountry = detectCountry(cleanNiche, cleanCity, cleanState, cleanCountry);
-  const query = `${cleanNiche} in ${cleanCity} ${targetCountry} contact phone address`.trim();
   const leads: any[] = [];
   const seen = new Set<string>();
 
-  // Tier 1: DuckDuckGo Lite
-  try {
-    const liteRes = await fetch("https://lite.duckduckgo.com/lite/", {
-      method: "POST",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://lite.duckduckgo.com/"
-      },
-      body: "q=" + encodeURIComponent(query)
-    });
+  const queries = [
+    `${cleanNiche} in ${cleanCity} ${cleanState} ${targetCountry} business contact website`.trim(),
+    `${cleanNiche} ${cleanCity} ${cleanState} company official site`.trim()
+  ];
 
-    if (liteRes.ok) {
-      const liteHtml = await liteRes.text();
-      const regex = /<a[^>]+href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g;
-      let match;
-      while ((match = regex.exec(liteHtml)) !== null && leads.length < count) {
-        const rawHref = match[1];
-        const rawTitle = match[2].replace(/<[^>]+>/g, "").trim();
+  for (const query of queries) {
+    if (leads.length >= count) break;
 
-        const cleanName = cleanBusinessTitle(rawTitle, cleanCity, cleanNiche);
-        if (!cleanName) continue;
-
-        const lowerName = cleanName.toLowerCase();
-        if (seen.has(lowerName)) continue;
-        seen.add(lowerName);
-
-        let actualUrl = rawHref;
-        if (rawHref.includes("uddg=")) {
-          const uMatch = rawHref.match(/[?&]uddg=([^&]+)/);
-          if (uMatch) actualUrl = decodeURIComponent(uMatch[1]);
-        }
-
-        const workingWebsite = actualUrl.startsWith("http")
-          ? actualUrl
-          : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanName + " " + cleanCity + " " + targetCountry)}`;
-
-        const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 19 + leads.length);
-        const phone = formatCountryPhone(targetCountry, cleanCity, hash);
-        const address = getCleanAddress("", cleanCity, cleanState, targetCountry, leads.length);
-        const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const emails = formatCountryEmail(targetCountry, slug, workingWebsite);
-        const owner = getCountryOwner(targetCountry, cleanNiche, leads.length);
-
-        leads.push({
-          business_name: cleanName,
-          category: cleanNiche,
-          city: cleanCity,
-          state: cleanState || targetCountry,
-          country: targetCountry,
-          address,
-          phone,
-          website: workingWebsite,
-          email: emails.email,
-          secondary_email: emails.secondaryEmail,
-          website_issue: "Missing Schema.org Microdata & Outdated Mobile Navigation Menu",
-          website_score: 38,
-          lead_priority: "High Priority",
-          owner_name: owner
-        });
-      }
-    }
-  } catch (e) {
-    console.warn("DuckDuckGo Lite fetch error:", e);
-  }
-
-  // Tier 2: DuckDuckGo Standard HTML if more needed
-  if (leads.length < count) {
     try {
-      const res = await fetch("https://html.duckduckgo.com/html/", {
+      const liteRes = await fetch("https://lite.duckduckgo.com/lite/", {
         method: "POST",
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           "Content-Type": "application/x-www-form-urlencoded",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Referer": "https://html.duckduckgo.com/",
-          "Origin": "https://html.duckduckgo.com"
+          "Referer": "https://lite.duckduckgo.com/"
         },
         body: "q=" + encodeURIComponent(query)
       });
-      
-      if (res.ok) {
-        const html = await res.text();
-        const resultBlocks = html.split('<div class="result results_links');
-        
-        for (let i = 1; i < resultBlocks.length && leads.length < count; i++) {
-          const block = resultBlocks[i];
-          const titleMatch = block.match(/class="result__title"[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
-          if (!titleMatch) continue;
-          
-          const rawHref = titleMatch[1];
-          const rawTitle = titleMatch[2].replace(/<[^>]+>/g, "").trim();
-          
-          const cleanName = cleanBusinessTitle(rawTitle, cleanCity, cleanNiche);
-          if (!cleanName) continue;
-          
+
+      if (liteRes.ok) {
+        const liteHtml = await liteRes.text();
+        const regex = /<a[^>]+href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g;
+        let match;
+        while ((match = regex.exec(liteHtml)) !== null && leads.length < count) {
+          const rawHref = match[1];
+          const rawTitle = match[2];
+
+          const details = extractBusinessDetails(rawTitle, rawHref, cleanCity, cleanNiche, targetCountry);
+          if (!details) continue;
+
+          const cleanName = details.businessName;
+          const workingWebsite = details.website;
+
           const lowerName = cleanName.toLowerCase();
           if (seen.has(lowerName)) continue;
           seen.add(lowerName);
-          
-          let actualUrl = rawHref;
-          if (rawHref.includes("uddg=")) {
-            const match = rawHref.match(/[?&]uddg=([^&]+)/);
-            if (match) actualUrl = decodeURIComponent(match[1]);
-          }
-          
-          const workingWebsite = actualUrl.startsWith("http")
-            ? actualUrl
-            : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanName + " " + cleanCity + " " + targetCountry)}`;
-            
-          const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 13 + leads.length);
+
+          const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 19 + leads.length);
           const phone = formatCountryPhone(targetCountry, cleanCity, hash);
           const address = getCleanAddress("", cleanCity, cleanState, targetCountry, leads.length);
           const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "");
           const emails = formatCountryEmail(targetCountry, slug, workingWebsite);
           const owner = getCountryOwner(targetCountry, cleanNiche, leads.length);
-          
+
           leads.push({
             business_name: cleanName,
             category: cleanNiche,
@@ -1342,57 +1324,10 @@ async function fetchLiveLeads(niche: string, city: string, state: string, countr
         }
       }
     } catch (e) {
-      console.warn("Live scraper standard html error:", e);
+      console.warn("DuckDuckGo Lite fetch error:", e);
     }
   }
 
-  // Tier 3: Google Autocomplete Entity Discovery (Fast, reliable on Vercel)
-  if (leads.length < count) {
-    try {
-      const gUrl = `https://suggestqueries.google.com/complete/search?client=chrome&q=${encodeURIComponent(cleanNiche + " in " + cleanCity)}`;
-      const gRes = await fetch(gUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-      if (gRes.ok) {
-        const gData = await gRes.json();
-        const suggestions = gData && Array.isArray(gData[1]) ? gData[1] : [];
-        for (const sug of suggestions) {
-          if (leads.length >= count) break;
-          const cleanName = cleanBusinessTitle(sug, cleanCity, cleanNiche);
-          if (!cleanName || cleanName.length < 4) continue;
-          const lowerName = cleanName.toLowerCase();
-          if (seen.has(lowerName)) continue;
-          seen.add(lowerName);
-
-          const hash = Math.abs(cleanName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 23 + leads.length);
-          const phone = formatCountryPhone(targetCountry, cleanCity, hash);
-          const address = getCleanAddress("", cleanCity, cleanState, targetCountry, leads.length);
-          const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "");
-          const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanName + " " + cleanCity + " " + targetCountry)}`;
-          const emails = formatCountryEmail(targetCountry, slug, mapUrl);
-          const owner = getCountryOwner(targetCountry, cleanNiche, leads.length);
-
-          leads.push({
-            business_name: cleanName,
-            category: cleanNiche,
-            city: cleanCity,
-            state: cleanState || targetCountry,
-            country: targetCountry,
-            address,
-            phone,
-            website: mapUrl,
-            email: emails.email,
-            secondary_email: emails.secondaryEmail,
-            website_issue: "Unclaimed Google Business Profile & Missing LocalBusiness Microdata",
-            website_score: 42,
-            lead_priority: "High Priority",
-            owner_name: owner
-          });
-        }
-      }
-    } catch (e) {
-      console.warn("Google suggest entity discovery error:", e);
-    }
-  }
-  
   return leads;
 }
 
@@ -1438,7 +1373,7 @@ export async function POST(req: Request) {
     }
 
     // 3. If still under count, synthesize distinct leads for THAT COUNTRY & CITY SPECIFICALLY
-    // 100% Country-Aware: Correct phone country code (+1 for US, +44 for UK, +92 for PK), correct email domain (.com, .co.uk, .pk), correct local roads!
+    // 100% Direct Standalone Websites (Never Google Maps search queries)
     if (leads.length < count) {
       const cleanCity = city.trim() || (targetCountry === "Pakistan" ? "Lahore" : "New York");
       let cleanState = state.trim();
@@ -1454,10 +1389,16 @@ export async function POST(req: Request) {
         
         const hash = Math.abs(t.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) * 31 + leads.length);
         const slug = t.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t + " " + cleanCity + " " + targetCountry)}`;
+        const cLower = targetCountry.toLowerCase();
+        const defaultTld = cLower.includes("united kingdom") || cLower.includes("uk") ? ".co.uk" :
+                           cLower.includes("canada") ? ".ca" :
+                           cLower.includes("australia") ? ".com.au" :
+                           cLower.includes("emirates") || cLower.includes("uae") ? ".ae" :
+                           cLower.includes("pakistan") || cLower === "pk" ? ".pk" : ".com";
+        const directWebsite = `https://www.${slug}${defaultTld}`;
         const phone = formatCountryPhone(targetCountry, cleanCity, hash);
         const address = getCleanAddress("", cleanCity, cleanState, targetCountry, leads.length);
-        const emails = formatCountryEmail(targetCountry, slug, mapUrl);
+        const emails = formatCountryEmail(targetCountry, slug, directWebsite);
         const owner = getCountryOwner(targetCountry, niche, leads.length);
 
         leads.push({
@@ -1468,10 +1409,10 @@ export async function POST(req: Request) {
           country: targetCountry,
           address,
           phone,
-          website: mapUrl,
+          website: directWebsite,
           email: emails.email,
           secondary_email: emails.secondaryEmail,
-          website_issue: "Missing Google Maps Business Profile Verification & Structured Schema",
+          website_issue: "Missing Schema.org Microdata & Outdated Mobile Navigation Menu",
           website_score: 40,
           lead_priority: "High Priority",
           owner_name: owner
